@@ -27,6 +27,9 @@ function HttpJeedomAccessory(log, config) {
 
   //HumidityService
   this.humidityCommandID     = config["humidityCommandID"];
+  
+  //AmbientLightService
+  this.ambientLightCommandID     = config["ambientLightCommandID"];
 
 }
 
@@ -156,6 +159,32 @@ getHumidity: function(callback) {
 
 },
 
+getAmbientLight: function(callback) {
+  var url;
+
+  if (!this.ambientLightCommandID) {
+    this.log.warn("No ambient light command ID defined");
+    callback(new Error("No ambient light command ID defined"));
+    return;
+  }
+
+  url = this.setUrl(this.ambientLightCommandID);
+
+  this.log("Getting current humidity for sensor " + this.name );
+
+  this.httpRequest(url, function(error, response, responseBody) {
+    if (error) {
+      this.log("HTTP get ambient light function failed: %s", error.message);
+      callback(error);
+    } else {
+      var floatState = parseFloat(responseBody);
+      this.log("Ambient light for sensor " + this.name + " is currently %s", floatState);
+      callback(null, floatState);
+    }
+  }.bind(this));
+
+},
+
 identify: function(callback) {
   this.log("Identify requested");
   callback();
@@ -200,6 +229,15 @@ getServices: function() {
     .on('get', this.getHumidity.bind(this));
 
     return [informationService, humidityService];
+
+  } else if (this.service == "AmbientLightService") {
+    var AmbientLightService = new Service.LightSensor(this.name);
+
+    AmbientLightService
+    .getCharacteristic(Characteristic.CurrentAmbientLightLevel)
+    .on('get', this.getAmbientLight.bind(this));
+
+    return [informationService, AmbientLightService];
   }
 
 }
