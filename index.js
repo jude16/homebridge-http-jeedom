@@ -231,13 +231,13 @@ getServices: function() {
     return [informationService, humidityService];
 
   } else if (this.service == "AmbientLightService") {
-    var AmbientLightService = new Service.LightSensor(this.name);
+    var ambientLightService = new Service.LightSensor(this.name);
 
-    AmbientLightService
+    ambientLightService
     .getCharacteristic(Characteristic.CurrentAmbientLightLevel)
     .on('get', this.getAmbientLight.bind(this));
 
-    return [informationService, AmbientLightService];
+    return [informationService, ambientLightService];
   }
 
 }
