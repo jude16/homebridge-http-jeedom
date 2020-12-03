@@ -38,12 +38,16 @@ function HttpJeedomAccessory(log, config) {
     this.temperatureID;
     this.targetTemperatureID;
     this.targetThermostatID;
+    this.targetOffID;
+    this.targetAllAllowID;
+    this.targetHeatID;
+    this.targetCoolID;
     // this.currentRelativeHumidityID = config.currentRelativeHumidityID;
     // this.currentHumidity = config.currentHumidity || false;
     // this.targetHumidity = config.targetHumidity || false;
     this.temperatureDisplayUnits = config.temperatureDisplayUnits || 0;
-    this.maxTemp = config.maxTemp || 30;
-    this.minTemp = config.minTemp || 15;
+    this.maxTemp = 30;
+    this.minTemp = 15;
     this.heatOnly = config.heatOnly || false;
     this.targetRelativeHumidity = 90;
     this.currentRelativeHumidity = 90;
@@ -56,12 +60,41 @@ function HttpJeedomAccessory(log, config) {
 
 HttpJeedomAccessory.prototype = {
 
+    //Call Jeedom API
     httpRequest: function(url, callback) {
         request({
                 url: url,
                 method: "GET",
                 rejectUnauthorized: false
             },
+            function(error, response, body) {
+                callback(error, response, body)
+            })
+    },
+
+    //Call Jeedom JSON RPC API
+    jsonRpcRequest: function(method, params = {}, callback) {
+        var headers = {
+            'User-Agent': 'Super Agent/0.0.1',
+            'Content-Type': 'application/json-rpc',
+            'Accept': 'application/json-rpc'
+        };
+
+        params.apikey = this.jeedom_api;
+
+        var options = {
+            url: this.jeedom_url + "/core/api/jeeApi.php",
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify({
+                jsonrpc: '2.0',
+                method: method,
+                params: params,
+                id: 1
+            })
+        };
+
+        request(options,
             function(error, response, body) {
                 callback(error, response, body)
             })
@@ -205,7 +238,6 @@ HttpJeedomAccessory.prototype = {
     },
 
     initThermostatCommands: function(callback) {
-
         if (!this.thermostatID) {
             console.log.warn("No " + objectName + " command ID defined");
             return;
@@ -220,10 +252,11 @@ HttpJeedomAccessory.prototype = {
 
         var that = this;
 
+        //Get eqLogic commands
         this.httpRequest(url, function(error, response, responseBody) {
             if (error) {
                 that.log("HTTP get " + objectName + " function failed: %s", error.message);
-                return;
+                callback(error);
             } else {
                 let thermoCmds = JSON.parse(responseBody);
 
@@ -248,10 +281,39 @@ HttpJeedomAccessory.prototype = {
                     return obj.logicalId === "mode"
                 })[0].id;
 
+                that.targetAllAllowID = thermoCmds.filter(obj => {
+                    return obj.logicalId === "all_allow"
+                })[0].id;
+
+                that.targetHeatID = thermoCmds.filter(obj => {
+                    return obj.logicalId === "heat_only"
+                })[0].id;
+
+                that.targetCoolID = thermoCmds.filter(obj => {
+                    return obj.logicalId === "cool_only"
+                })[0].id;
+
+                that.targetOffID = thermoCmds.filter(obj => {
+                    return obj.logicalId === "off"
+                })[0].id;
+
                 that.log(objectName + " for sensor " + that.name + " is loaded");
             }
         });
 
+        //Get eqLogic configuration
+        this.jsonRpcRequest("eqLogic::byId", { id: this.thermostatID }, function(error, response, responseBody) {
+            if (error) {
+                that.log("HTTP get " + objectName + " function failed: %s", error.message);
+                callback(error);
+            } else {
+                objectConfig = JSON.parse(responseBody).result;
+
+                that.maxTemp = objectConfig.configuration.order_max != "" ? parseFloat(objectConfig.configuration.order_max) : that.maxTemp;
+                that.minTemp = objectConfig.configuration.order_min != "" ? parseFloat(objectConfig.configuration.order_min) : that.minTemp;
+            }
+            callback();
+        });
     },
 
     getCurrentHeatingCoolingState: function(callback) {
@@ -292,6 +354,8 @@ HttpJeedomAccessory.prototype = {
     getTargetHeatingCoolingState: function(callback) {
         var url;
         var objectName = "thermostat mode";
+        var objectConfig;
+        var that = this;
 
         if (!this.thermoModeID) {
             this.log.warn("No " + objectName + " command ID defined");
@@ -299,25 +363,66 @@ HttpJeedomAccessory.prototype = {
             return;
         }
 
-        url = this.setUrl(this.thermoModeID);
-
-        this.httpRequest(url, function(error, response, responseBody) {
+        //Get eqLogic configuration
+        this.jsonRpcRequest("eqLogic::byId", { id: this.thermostatID }, function(error, response, responseBody) {
             if (error) {
-                this.log("HTTP get " + objectName + " function failed: %s", error.message);
+                that.log("HTTP get " + objectName + " function failed: %s", error.message);
                 callback(error);
             } else {
-                switch (responseBody) {
-                    case "Off":
-                        this.targetHeatingCoolingState = Characteristic.TargetHeatingCoolingState.OFF;
-                        break;
+                objectConfig = JSON.parse(responseBody).result;
+                url = that.setUrl(that.thermoModeID);
 
-                    default:
-                        this.targetHeatingCoolingState = Characteristic.TargetHeatingCoolingState.AUTO;
-                        break;
-                }
+                that.httpRequest(url, function(error, response, responseBody) {
+                    if (error) {
+                        that.log("HTTP get " + objectName + " function failed: %s", error.message);
+                        callback(error);
+                    } else {
+                        if (responseBody == "Off")
+                            that.targetHeatingCoolingState = Characteristic.TargetHeatingCoolingState.OFF;
+                        else if (objectConfig.configuration.allow_mode == "heat" || that.heatOnly)
+                            that.targetHeatingCoolingState = Characteristic.TargetHeatingCoolingState.HEAT;
+                        else if (objectConfig.configuration.allow_mode == "cool")
+                            that.targetHeatingCoolingState = Characteristic.TargetHeatingCoolingState.COOL;
+                        else
+                            that.targetHeatingCoolingState = Characteristic.TargetHeatingCoolingState.AUTO;
+                    }
 
-                this.log(objectName + " for sensor " + this.name + " is currently %s", this.targetHeatingCoolingState);
-                callback(null, this.targetHeatingCoolingState);
+                    that.log(objectName + " for sensor " + that.name + " is currently %s", that.targetHeatingCoolingState);
+                    callback(null, that.targetHeatingCoolingState);
+                }.bind(that));
+            }
+        });
+    },
+
+    setTargetHeatingCoolingState: function(value, callback) {
+        var url;
+        var objectName = "thermostat target heating/ cooling state";
+
+        switch (value) {
+            case Characteristic.TargetHeatingCoolingState.OFF:
+                url = this.setUrl(this.targetOffID);
+                break;
+            case Characteristic.TargetHeatingCoolingState.HEAT:
+                url = this.setUrl(this.targetHeatID);
+                this.setTargetTemperature(this.targetTemperature, (response) => {});
+                break;
+            case Characteristic.TargetHeatingCoolingState.COOL:
+                url = this.setUrl(this.targetCoolID);
+                this.setTargetTemperature(this.targetTemperature, (response) => {});
+                break;
+            case Characteristic.TargetHeatingCoolingState.AUTO:
+                url = this.setUrl(this.targetAllAllowID);
+                this.setTargetTemperature(this.targetTemperature, (response) => {});
+                break;
+        }
+
+        this.httpRequest(url, function(error) {
+            if (error) {
+                this.log("HTTP set " + objectName + " function failed: %s", error.message);
+                callback(error);
+            } else {
+                this.log(objectName + " for sensor " + this.name + " is set to %s", value);
+                callback();
             }
         }.bind(this));
     },
@@ -418,6 +523,14 @@ HttpJeedomAccessory.prototype = {
         }.bind(this));
     },
 
+    getTemperatureDisplayUnits: function(callback) {
+		callback(null, this.temperatureDisplayUnits);
+	},
+    setTemperatureDisplayUnits: function(value, callback) {
+		this.temperatureDisplayUnits = value;
+		callback();
+	},
+
     getName: function(callback) {
         this.log("getName :", this.name);
         callback(null, this.name);
@@ -480,16 +593,14 @@ HttpJeedomAccessory.prototype = {
 
             var thermostatService = new Service.Thermostat(this.name);
 
-            this.initThermostatCommands();
-
             thermostatService
                 .getCharacteristic(Characteristic.CurrentHeatingCoolingState)
                 .on('get', this.getCurrentHeatingCoolingState.bind(this));
 
             thermostatService
                 .getCharacteristic(Characteristic.TargetHeatingCoolingState)
-                .on('get', this.getTargetHeatingCoolingState.bind(this));
-            //     .on('set', this.setTargetHeatingCoolingState.bind(this));
+                .on('get', this.getTargetHeatingCoolingState.bind(this))
+                .on('set', this.setTargetHeatingCoolingState.bind(this));
 
             thermostatService
                 .getCharacteristic(Characteristic.CurrentTemperature)
@@ -500,10 +611,10 @@ HttpJeedomAccessory.prototype = {
                 .on('get', this.getTargetTemperature.bind(this))
                 .on('set', this.setTargetTemperature.bind(this));
 
-            // this.service
-            //     .getCharacteristic(Characteristic.TemperatureDisplayUnits)
-            //     .on('get', this.getTemperatureDisplayUnits.bind(this))
-            //     .on('set', this.setTemperatureDisplayUnits.bind(this));
+            thermostatService
+                .getCharacteristic(Characteristic.TemperatureDisplayUnits)
+                .on('get', this.getTemperatureDisplayUnits.bind(this))
+                .on('set', this.setTemperatureDisplayUnits.bind(this));
 
             thermostatService
                 .getCharacteristic(Characteristic.Name)
@@ -522,7 +633,8 @@ HttpJeedomAccessory.prototype = {
             //         .on('set', this.setTargetRelativeHumidity.bind(this));
         }
 
-        thermostatService.getCharacteristic(Characteristic.CurrentTemperature)
+        this.initThermostatCommands( (response) => {
+            thermostatService.getCharacteristic(Characteristic.CurrentTemperature)
             .setProps({
                 minStep: 0.1
             });
@@ -541,6 +653,8 @@ HttpJeedomAccessory.prototype = {
                     validValues: [0, 1]
                 });
         }
+        });
+
         return [informationService, thermostatService];
     }
 
