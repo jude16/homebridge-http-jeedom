@@ -42,9 +42,6 @@ function HttpJeedomAccessory(log, config) {
     this.targetAllAllowID;
     this.targetHeatID;
     this.targetCoolID;
-    // this.currentRelativeHumidityID = config.currentRelativeHumidityID;
-    // this.currentHumidity = config.currentHumidity || false;
-    // this.targetHumidity = config.targetHumidity || false;
     this.temperatureDisplayUnits = config.temperatureDisplayUnits || 0;
     this.maxTemp = 30;
     this.minTemp = 15;
@@ -619,18 +616,6 @@ HttpJeedomAccessory.prototype = {
             thermostatService
                 .getCharacteristic(Characteristic.Name)
                 .on('get', this.getName.bind(this));
-
-            // if (this.currentHumidity) {
-            //     thermostatService
-            //         .getCharacteristic(Characteristic.CurrentRelativeHumidity)
-            //         .on('get', this.getCurrentRelativeHumidity.bind(this));
-            // }
-
-            // if (this.targetHumidity) {
-            //     this.service
-            //         .getCharacteristic(Characteristic.TargetRelativeHumidity)
-            //         .on('get', this.getTargetRelativeHumidity.bind(this))
-            //         .on('set', this.setTargetRelativeHumidity.bind(this));
         }
 
         this.initThermostatCommands( (response) => {
